@@ -1,0 +1,90 @@
+From a20f97791a786203821570e84941ee7a67fd53e9 Mon Sep 17 00:00:00 2001
+From: Jerome Marchand <jmarchan@redhat.com>
+Date: Mon, 20 Apr 2026 15:46:37 +0200
+Subject: [PATCH mainline 1/1] selftests/bpf: Page out as late as possible in
+ file_reader
+
+The file_reader/on_open_expect_fault fails consistently on my system.
+It expects a page fault on first dynptr read of some range the exe
+file of the current process because it has paged out that page range
+earlier. However a lot can happen to that range (which depending on
+the actual memory layout could contain text section, data section,
+sections )related to dynamic linking...) between the moment it was
+paged out and the moment the bpf program expected to hit a pagefault
+actually run.
+
+A bit of instrumentation with mincore() shows that pages from that
+range were accessed several times before the program is run. In
+particular the call of file_reader__load() seems to fault all the
+range in.
+
+Move the call to madvise(MADV_PAGEOUT) to just before attaching the
+program to minimize the risk of having those page pulled back in from
+under our feet.
+
+Signed-off-by: Jerome Marchand <jmarchan@redhat.com>
+Acked-by: Mykyta Yatsenko <yatsenko@meta.com>
+Acked-by: Jiri Olsa <jolsa@kernel.org>
+Link: https://lore.kernel.org/bpf/20260420134637.2513867-1-jmarchan@redhat.com
+Signed-off-by: Kumar Kartikeya Dwivedi <memxor@gmail.com>
+---
+ .../selftests/bpf/prog_tests/file_reader.c    | 22 +++++++++----------
+ 1 file changed, 10 insertions(+), 12 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/file_reader.c b/tools/testing/selftests/bpf/prog_tests/file_reader.c
+index 5cde32b35da4..48aae7ea0e4b 100644
+--- a/tools/testing/selftests/bpf/prog_tests/file_reader.c
++++ b/tools/testing/selftests/bpf/prog_tests/file_reader.c
+@@ -10,6 +10,7 @@
+ 
+ const char *user_ptr = "hello world";
+ char file_contents[256000];
++void *addr;
+ 
+ void *get_executable_base_addr(void)
+ {
+@@ -26,8 +27,7 @@ void *get_executable_base_addr(void)
+ static int initialize_file_contents(void)
+ {
+ 	int fd, page_sz = sysconf(_SC_PAGESIZE);
+-	ssize_t n = 0, cur, off;
+-	void *addr;
++	ssize_t n = 0, cur;
+ 
+ 	fd = open("/proc/self/exe", O_RDONLY);
+ 	if (!ASSERT_OK_FD(fd, "Open /proc/self/exe\n"))
+@@ -52,16 +52,6 @@ static int initialize_file_contents(void)
+ 	/* page-align base file address */
+ 	addr = (void *)((unsigned long)addr & ~(page_sz - 1));
+ 
+-	/*
+-	 * Page out range 0..512K, use 0..256K for positive tests and
+-	 * 256K..512K for negative tests expecting page faults
+-	 */
+-	for (off = 0; off < sizeof(file_contents) * 2; off += page_sz) {
+-		if (!ASSERT_OK(madvise(addr + off, page_sz, MADV_PAGEOUT),
+-			       "madvise pageout"))
+-			return errno;
+-	}
+-
+ 	return 0;
+ }
+ 
+@@ -90,6 +80,14 @@ static void run_test(const char *prog_name)
+ 	if (!ASSERT_OK(err, "file_reader__load"))
+ 		goto cleanup;
+ 
++	/*
++	 * Page out range 0..512K, use 0..256K for positive tests and
++	 * 256K..512K for negative tests expecting page faults
++	 */
++	if (!ASSERT_OK(madvise(addr, sizeof(file_contents) * 2, MADV_PAGEOUT),
++		       "madvise pageout"))
++		goto cleanup;
++
+ 	err = file_reader__attach(skel);
+ 	if (!ASSERT_OK(err, "file_reader__attach"))
+ 		goto cleanup;
+-- 
+2.54.0
+

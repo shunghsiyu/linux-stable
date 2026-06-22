@@ -1,0 +1,127 @@
+name: BPF CI
+
+# CI entry point. Runs on every push to a synced version branch (linux-X.Y.y).
+#
+# This is currently a DEMO STUB that only proves the infrastructure works:
+# the sync produced a branch that carries the kernel source + this repo's CI
+# code, the push triggered CI on our bare-metal runners, and the workflow can
+# read the overlaid ci/ config. The actual kernel build + selftest run is left
+# for Shung-Hsi to fill in here (see ci/ and the kernel source at the repo root).
+
+on:
+  push:
+    branches: [ 'linux-*.y' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  set-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      build-matrix: ${{ steps.gen.outputs.build_matrix }}
+    steps:
+      - id: gen
+        name: Select build config for ${{ github.ref_name }}
+        shell: bash
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            linux-7.0.y) llvm=21; kernel=7.0 ;;
+            linux-6.18.y) llvm=21; kernel=6.18 ;;
+            linux-6.12.y) llvm=18; kernel=6.12 ;;
+            linux-6.6.y) llvm=18; kernel=6.6 ;;
+            linux-6.1.y) llvm=18; kernel=6.1 ;;
+            *)
+              echo "::error::no CI config defined for branch ${GITHUB_REF_NAME}"
+              exit 1
+              ;;
+          esac
+          matrix=$(jq -nc --arg llvm "$llvm" --arg kernel "$kernel" \
+            '{include: [{arch: "x86_64", llvm_version: $llvm, kernel: $kernel}]}')
+          echo "build_matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  build-and-test:
+    needs: [set-matrix]
+    name: ${{ matrix.arch }} llvm-${{ matrix.llvm_version }} kernel-${{ matrix.kernel }}
+    runs-on: [ self-hosted, docker-noble-main, x86_64 ]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-matrix.outputs.build-matrix) }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Show what is being tested
+        run: |
+          echo "Branch:   ${GITHUB_REF_NAME}"
+          echo "Revision: ${GITHUB_SHA}"
+          echo
+          echo "=== recent history (released tip -> stable-queue -> ci overlay) ==="
+          git log --oneline -8
+          echo
+          echo "=== kernel source is present on the branch (top of Makefile) ==="
+          head -5 Makefile || echo "no Makefile -- kernel source missing?"
+          echo
+          echo "=== overlaid ci/ config is readable ==="
+          cat ci/vmtest/configs/DENYLIST
+          echo
+          echo "Kernel build + selftests are intentionally left as a stub for Shung-Hsi."
+
+      - name: Setup environment
+        uses: libbpf/ci/setup-build-env@v3
+        with:
+          pahole: master
+          arch: ${{ matrix.arch }}
+          llvm-version: ${{ matrix.llvm_version }}
+
+      # TODO: merge these into .github/scripts/sync-stable.sh
+      - name: Patch kernel source (specific)
+        uses: libbpf/ci/patch-kernel@v3
+        with:
+          patches-root: '${{ github.workspace }}/ci/diffs/${{ matrix.kernel }}'
+      - name: Patch kernel source
+        uses: libbpf/ci/patch-kernel@v3
+        with:
+          patches-root: '${{ github.workspace }}/ci/diffs'
+
+      - name: Configure kernel build
+        shell: bash
+        run: |
+          cat tools/testing/selftests/bpf/config \
+              tools/testing/selftests/bpf/config.${{ matrix.arch }} > .config
+          # this file might or might not exist depending on kernel version
+          cat tools/testing/selftests/bpf/config.vm >> .config || :
+          make olddefconfig && make prepare
+
+      - name: Build kernel image
+        shell: bash
+        run: |
+          make -j $((4*$(nproc))) all
+
+      - name: Build selftests/bpf
+        uses: libbpf/ci/build-selftests@v3
+        env:
+          MAX_MAKE_JOBS: 32
+          VMLINUX_BTF: ${{ github.workspace }}/vmlinux
+          VMLINUX_H: ''
+        with:
+          arch: ${{ matrix.arch }}
+          kernel-root: ${{ github.workspace }}
+          llvm-version: ${{ matrix.llvm_version }}
+
+      - name: Run selftests
+        env:
+          ALLOWLIST_FILE: /tmp/allowlist
+          DENYLIST_FILE: /tmp/denylist
+          KERNEL: ${{ matrix.kernel }}
+          VMLINUX: ${{ github.workspace }}/vmlinux
+          LLVM_VERSION: ${{ matrix.llvm_version }}
+          SELFTESTS_BPF: ${{ github.workspace }}/tools/testing/selftests/bpf
+          VMTEST_CONFIGS: ${{ github.workspace }}/ci/vmtest/configs
+        uses: libbpf/ci/run-vmtest@v3
+        with:
+          arch: ${{ matrix.arch }}
+          kbuild-output: ${{ github.workspace }}
+          kernel-root: ${{ github.workspace }}
+          vmlinuz: ${{ matrix.arch }}/vmlinuz-${{ matrix.kernel }}
