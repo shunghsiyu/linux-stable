@@ -1,0 +1,70 @@
+name: Sync openSUSE
+
+# Sync upstream Linux stable trees into per-version CI branches.
+#
+# For each tracked version X.Y this regenerates the `linux-X.Y.y` branch from the
+# released upstream tip + stable-queue, with this repo's CI code (.github + ci)
+# overlaid on top. The push to that branch triggers the CI workflow (test.yml).
+#
+# CI-code edits go to `main`; this workflow propagates them to the version
+# branches (the `push: main` trigger re-overlays promptly).
+
+on:
+  schedule:
+    # Daily. stable tips advance ~weekly and the queue->test path already has
+    # inherent delay; the per-version tree-idempotency check means unchanged
+    # versions cost only a cheap fetch (no push, no CI run).
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Space-separated versions to sync (default: all tracked)'
+        required: false
+        type: string
+  push:
+    branches: [ main ]
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.set.outputs.versions }}
+    steps:
+      - id: set
+        env:
+          INPUT: ${{ inputs.versions }}
+        run: |
+          # Tracked stable set: newest stable down to the 6.1 LTS floor.
+          list="${INPUT:-SL-16.0 SL-16.1}"
+          json="$(printf '%s\n' ${list} | jq -R . | jq -cs .)"
+          echo "versions=${json}" >> "${GITHUB_OUTPUT}"
+          echo "Will sync: ${json}"
+
+  sync:
+    needs: [prepare]
+    # Run stable syncs after the mainline refresh so first-time seeds use the
+    # fresh base. Tolerate a mainline-sync failure: existing branches seed from
+    # their own published branch, and a stale mainline still works as a base.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1200
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.prepare.outputs.versions) }}
+    name: sync openSUSE ${{ matrix.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Sync openSUSE ${{ matrix.version }}
+        env:
+          REPO: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: .github/scripts/sync-opensuse.sh "${{ matrix.version }}"
