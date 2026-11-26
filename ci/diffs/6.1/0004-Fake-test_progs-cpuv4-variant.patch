@@ -1,0 +1,23 @@
+From 631f9d4dda21bd8102448f2f8b6b3b2dcd77a166 Mon Sep 17 00:00:00 2001
+From: Paul Chaignon <paul.chaignon@gmail.com>
+Date: Wed, 20 May 2026 11:44:49 +0200
+Subject: [PATCH 4/4] Fake test_progs-cpuv4 variant
+
+Signed-off-by: Paul Chaignon <paul.chaignon@gmail.com>
+---
+ tools/testing/selftests/bpf/test_progs-cpuv4 | 3 +++
+ 1 file changed, 3 insertions(+)
+ create mode 100755 tools/testing/selftests/bpf/test_progs-cpuv4
+
+diff --git a/tools/testing/selftests/bpf/test_progs-cpuv4 b/tools/testing/selftests/bpf/test_progs-cpuv4
+new file mode 100755
+index 000000000000..42d12999e8aa
+--- /dev/null
++++ b/tools/testing/selftests/bpf/test_progs-cpuv4
+@@ -0,0 +1,3 @@
++#!/bin/bash
++
++echo "Fake cpuv4 variant because the BPF CI expects it but v6.6 doesn't have it."
+-- 
+2.43.0
+

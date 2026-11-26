@@ -1,0 +1,38 @@
+From 9f4ed374eda618ec7104ed856479df764d9e48d5 Mon Sep 17 00:00:00 2001
+From: Shung-Hsi Yu <shung-hsi.yu@suse.com>
+Date: Thu, 24 Apr 2025 12:01:19 +0800
+Subject: [PATCH 01/17] Revert "selftests/bpf: adjust dummy_st_ops_success to
+ detect additional error"
+
+This reverts commit 264451a364dba5ca6cb2878126a9798dfc0b1a06.
+---
+ .../selftests/bpf/progs/dummy_st_ops_success.c      | 13 ++-----------
+ 1 file changed, 2 insertions(+), 11 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/dummy_st_ops_success.c b/tools/testing/selftests/bpf/progs/dummy_st_ops_success.c
+index ec0c595d47af..151e3a3ea27f 100644
+--- a/tools/testing/selftests/bpf/progs/dummy_st_ops_success.c
++++ b/tools/testing/selftests/bpf/progs/dummy_st_ops_success.c
+@@ -11,17 +11,8 @@ int BPF_PROG(test_1, struct bpf_dummy_ops_state *state)
+ {
+ 	int ret;
+ 
+-	/* Check that 'state' nullable status is detected correctly.
+-	 * If 'state' argument would be assumed non-null by verifier
+-	 * the code below would be deleted as dead (which it shouldn't).
+-	 * Hide it from the compiler behind 'asm' block to avoid
+-	 * unnecessary optimizations.
+-	 */
+-	asm volatile (
+-		"if %[state] != 0 goto +2;"
+-		"r0 = 0xf2f3f4f5;"
+-		"exit;"
+-	::[state]"p"(state));
++	if (!state)
++		return 0xf2f3f4f5;
+ 
+ 	ret = state->val;
+ 	state->val = 0x5a;
+-- 
+2.49.0
+
